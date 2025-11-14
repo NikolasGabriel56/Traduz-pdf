@@ -27,9 +27,7 @@ def traduzir_docx(docx_path, idioma_destino):
     tradutor = GoogleTranslator(source="auto", target=idioma_destino)
     doc = Document(docx_path)
 
-    # =============================
-    #  MARGENS DISCRETAS (não alteram layout)
-    # =============================
+    # Margens bem discretas (não alteram visual)
     CM = 360000
     for section in doc.sections:
         section.top_margin = int(0.5 * CM)
@@ -38,74 +36,110 @@ def traduzir_docx(docx_path, idioma_destino):
         section.right_margin = int(0.8 * CM)
 
     # =============================
-    #  TRADUÇÃO DE PARÁGRAFOS NORMAIS
+    # TRADUÇÃO DE PARÁGRAFOS (fora das tabelas)
+    # Preservando runs
     # =============================
     for p in doc.paragraphs:
-        texto = p.text.strip()
-        if texto:
-            try:
-                p.text = tradutor.translate(texto)
-            except:
-                pass
+        if not p.text.strip():
+            continue
+
+        texto_original = p.text
+        try:
+            texto_traduzido = tradutor.translate(texto_original)
+        except:
+            continue
+
+        # salvar runs originais
+        estilos_runs = []
+        for run in p.runs:
+            estilos_runs.append({
+                "bold": run.bold,
+                "italic": run.italic,
+                "underline": run.underline,
+                "font_name": run.font.name,
+                "font_size": run.font.size
+            })
+
+        # limpar parágrafo
+        while p.runs:
+            p.runs[0].clear()
+            p._element.remove(p.runs[0]._element)
+
+        # recriar novo run com formatação original (melhor possível)
+        run_novo = p.add_run(texto_traduzido)
+
+        if estilos_runs:
+            run_novo.bold = estilos_runs[0]["bold"]
+            run_novo.italic = estilos_runs[0]["italic"]
+            run_novo.underline = estilos_runs[0]["underline"]
+            if estilos_runs[0]["font_name"]:
+                run_novo.font.name = estilos_runs[0]["font_name"]
+            if estilos_runs[0]["font_size"]:
+                run_novo.font.size = estilos_runs[0]["font_size"]
+
+        p.paragraph_format.line_spacing = 1
+        p.paragraph_format.space_after = 0
 
     # =============================
-    #  TABELAS — manter layout + evitar sobreposição de linhas
+    # TABELAS — tradução com preservação total de formatação
     # =============================
     for tabela in doc.tables:
         for row in tabela.rows:
 
-            # === Permite que a ALTURA DA LINHA cresça automaticamente ===
+            # Altura automática da linha
             trPr = row._tr.get_or_add_trPr()
             autoHeight = docx.oxml.parse_xml(
-                r"<w:trHeight w:hRule='auto' "
-                r"xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'/>"
+                r"<w:trHeight w:hRule='auto' xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'/>"
             )
             trPr.append(autoHeight)
 
             for celula in row.cells:
 
-                # === Permitir quebra de linha natural dentro da célula ===
-                tcPr = celula._tc.get_or_add_tcPr()
-                wrap_xml = docx.oxml.parse_xml(
-                    r"<w:noWrap w:val='0' "
-                    r"xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'/>"
-                )
-                tcPr.append(wrap_xml)
+                texto_original = celula.text.strip()
+                if not texto_original:
+                    continue
 
-                # === Padding leve para afastar texto das linhas (evita sobreposição) ===
-                padding = docx.oxml.parse_xml(
-                    r"<w:tcMar xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>"
-                    r"<w:top w:w='30' w:type='dxa'/>"     # ~0.5 mm
-                    r"<w:left w:w='15' w:type='dxa'/>"
-                    r"<w:bottom w:w='30' w:type='dxa'/>"
-                    r"<w:right w:w='15' w:type='dxa'/>"
-                    r"</w:tcMar>"
-                )
-                tcPr.append(padding)
+                try:
+                    texto_traduzido = tradutor.translate(texto_original)
+                except:
+                    continue
 
-                # === Formatação fina ===
                 for para in celula.paragraphs:
+
+                    # salva os estilos de todos os runs
+                    estilos_runs = []
+                    for run in para.runs:
+                        estilos_runs.append({
+                            "bold": run.bold,
+                            "italic": run.italic,
+                            "underline": run.underline,
+                            "font_name": run.font.name,
+                            "font_size": run.font.size
+                        })
+
+                    # limpar o conteúdo mantendo formatação estrutural
+                    para.clear()
+
+                    # recriar run(s)
+                    run_novo = para.add_run(texto_traduzido)
+
+                    # aplicar estilo original do primeiro run da célula
+                    if estilos_runs:
+                        run_novo.bold = estilos_runs[0]["bold"]
+                        run_novo.italic = estilos_runs[0]["italic"]
+                        run_novo.underline = estilos_runs[0]["underline"]
+
+                        if estilos_runs[0]["font_name"]:
+                            run_novo.font.name = estilos_runs[0]["font_name"]
+
+                        if estilos_runs[0]["font_size"]:
+                            run_novo.font.size = estilos_runs[0]["font_size"]
+
                     para.paragraph_format.line_spacing = 1
                     para.paragraph_format.space_after = 0
 
-                    # Fonte ideal para caber sem estragar layout
-                    for run in para.runs:
-                        run.font.size = Pt(7.5)
-
-                # === TRADUÇÃO DO TEXTO DA CÉLULA ===
-                texto_cel = celula.text.strip()
-                if texto_cel:
-                    try:
-                        celula.text = tradutor.translate(texto_cel)
-                    except:
-                        pass
-
-    # =============================
-    #  SALVAR RESULTADO FINAL
-    # =============================
     novo_docx = docx_path.replace(".docx", f"_{idioma_destino}.docx")
     doc.save(novo_docx)
-
     return novo_docx
 
 # ============================================================
